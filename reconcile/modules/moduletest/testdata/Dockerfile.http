@@ -1,0 +1,6 @@
+FROM alpine:3.24
+
+RUN apk add --no-cache busybox-extras \
+  && mkdir -p /www
+
+CMD ["sleep", "86400"]

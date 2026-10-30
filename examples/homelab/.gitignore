@@ -1,0 +1,11 @@
+# Plaintext secrets (restore with `./gab unseal`).
+secrets.plain/
+
+# Real age identity (the committed sample-identity.txt is a throwaway).
+secrets/keys.txt
+
+# Local-mode target binary built by `deploy-local` and `e2e`.
+bin/
+
+# Vagrant state (see the vm-* and e2e tasks).
+.vagrant/

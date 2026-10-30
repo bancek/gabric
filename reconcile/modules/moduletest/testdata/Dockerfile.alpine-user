@@ -1,0 +1,6 @@
+FROM alpine:3.24
+
+RUN adduser -D -h /home/app -s /bin/sh app
+
+USER app
+CMD ["sleep", "86400"]

@@ -1,0 +1,5 @@
+#!/bin/bash
+# Run a homelab task. Pass -ssh-host explicitly, or use -local / the VM tasks.
+set -e
+cd "$(dirname "$0")"
+exec go run . "$@"

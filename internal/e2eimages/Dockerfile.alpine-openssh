@@ -1,0 +1,19 @@
+FROM alpine:3.24
+
+RUN apk add --no-cache openssh rsync sudo shadow \
+  && mkdir -p /run/sshd
+
+RUN adduser -D -s /bin/sh gabric \
+  && adduser -D -s /bin/sh app \
+  && echo 'gabric:gabric' | chpasswd \
+  && echo 'app:app' | chpasswd \
+  && echo 'gabric ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/gabric \
+  && chmod 0440 /etc/sudoers.d/gabric
+
+# jump hosts need direct-tcpip (our client uses it); Alpine's default is "no"
+RUN sed -i 's/^AllowTcpForwarding no/AllowTcpForwarding yes/' /etc/ssh/sshd_config
+
+RUN ssh-keygen -A
+
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D", "-e"]

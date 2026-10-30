@@ -1,0 +1,6 @@
+FROM alpine:3.24
+
+RUN apk add --no-cache bash shadow git rsync curl \
+  && adduser -D -h /home/app -s /bin/sh app
+
+CMD ["sleep", "86400"]

@@ -1,0 +1,14 @@
+FROM ubuntu:26.04
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    passwd \
+    procps \
+    rsync \
+  && useradd --create-home --shell /bin/sh app \
+  && rm -rf /var/lib/apt/lists/*
+
+CMD ["sleep", "86400"]
