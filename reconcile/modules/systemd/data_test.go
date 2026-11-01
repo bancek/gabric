@@ -105,3 +105,46 @@ func TestSystemdDataTransportErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestUserEnabledData(t *testing.T) {
+	gt := gabrictest.New(t)
+	gt.Remote().Handle("systemctl", func(cmd gabrictest.Command) gabrictest.Result {
+		if !cmd.HasArg("--user") {
+			return gabrictest.Result{ExitCode: 2}
+		}
+
+		return gabrictest.Result{Stdout: "enabled\n"}
+	})
+
+	if got := gt.RunNode(gt.Context(), UserEnabledData(input.Static("app.service"))); !got {
+		t.Error("UserEnabledData() = false, want true")
+	}
+
+	gt.Remote().AssertCommands(gt.Command("systemctl", "--user", "is-enabled", "app.service"))
+}
+
+func TestUserActiveData(t *testing.T) {
+	gt := gabrictest.New(t)
+	gt.Remote().Handle("systemctl", func(cmd gabrictest.Command) gabrictest.Result {
+		if !cmd.HasArg("--user") {
+			return gabrictest.Result{ExitCode: 2}
+		}
+
+		return gabrictest.Result{Stdout: "active\n"}
+	})
+
+	if got := gt.RunNode(gt.Context(), UserActiveData(input.Static("app.service"))); !got {
+		t.Error("UserActiveData() = false, want true")
+	}
+
+	gt.Remote().AssertCommands(gt.Command("systemctl", "--user", "is-active", "app.service"))
+}
+
+func TestUserDataNames(t *testing.T) {
+	if got, want := UserEnabledData(input.Static("app.service")).Name(), "systemd.user-enabled:app.service"; got != want {
+		t.Errorf("UserEnabledData() name = %q, want %q", got, want)
+	}
+	if got, want := UserActiveData(input.Static("app.service")).Name(), "systemd.user-active:app.service"; got != want {
+		t.Errorf("UserActiveData() name = %q, want %q", got, want)
+	}
+}
