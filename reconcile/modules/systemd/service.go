@@ -15,6 +15,7 @@ type ServiceBuilder struct {
 	nameInput    input.Input[string]
 	enabledInput input.Input[bool]
 	startedInput input.Input[bool]
+	userInput    input.Input[bool]
 }
 
 // Service ensures the systemd service name is enabled.
@@ -34,16 +35,31 @@ func (b *ServiceBuilder) Started(flag ...input.Input[bool]) *ServiceBuilder {
 	return b
 }
 
+// User sets whether the service is managed by the systemd user manager
+// (systemctl --user). Calling it with no argument means true.
+func (b *ServiceBuilder) User(flag ...input.Input[bool]) *ServiceBuilder {
+	b.userInput = input.Flag(flag...)
+	return b
+}
+
 // Build hands off to the reconcile node builder.
 func (b *ServiceBuilder) Build() *reconcile.ResourceBuilder[bool] {
 	if b.nameInput == nil {
 		panic("systemd: Service: nil name")
 	}
 
-	nameInput, enabledInput, startedInput := b.nameInput, b.enabledInput, b.startedInput
+	nameInput, enabledInput, startedInput, userInput := b.nameInput, b.enabledInput, b.startedInput, b.userInput
 
 	return reconcile.ResourceBool("systemd.service:"+nameInput.Name(),
 		func(ctx context.Context) (bool, error) {
+			user, err := input.Value(ctx, userInput)
+			if err != nil {
+				return false, err
+			}
+			if user {
+				return UserSatisfiedData(nameInput, enabledInput, startedInput).Value(ctx)
+			}
+
 			return SatisfiedData(nameInput, enabledInput, startedInput).Value(ctx)
 		},
 		func(ctx context.Context) error {
@@ -59,22 +75,45 @@ func (b *ServiceBuilder) Build() *reconcile.ResourceBuilder[bool] {
 			if err != nil {
 				return err
 			}
+			user, err := input.Value(ctx, userInput)
+			if err != nil {
+				return err
+			}
 			if !enabled && started {
 				return fmt.Errorf("systemd: service %s: started requires enabled", name)
 			}
 
-			return enable(ctx, name, enabled, started)
+			return enable(ctx, name, enabled, started, user)
 		})
 }
 
-// SatisfiedData reports whether the systemd service matches the desired
+// SatisfiedData reports whether the system service matches the desired
 // enable/active state.
 func SatisfiedData(nameInput input.Input[string], enabledInput, startedInput input.Input[bool]) *reconcile.Node[bool] {
 	if nameInput == nil {
 		panic("systemd: SatisfiedData: nil name")
 	}
 
-	return reconcile.Data("systemd.satisfied:"+nameInput.Name(), func(ctx context.Context) (bool, error) {
+	return satisfiedData(nameInput, enabledInput, startedInput, false)
+}
+
+// UserSatisfiedData reports whether the user service matches the desired
+// enable/active state.
+func UserSatisfiedData(nameInput input.Input[string], enabledInput, startedInput input.Input[bool]) *reconcile.Node[bool] {
+	if nameInput == nil {
+		panic("systemd: UserSatisfiedData: nil name")
+	}
+
+	return satisfiedData(nameInput, enabledInput, startedInput, true)
+}
+
+func satisfiedData(nameInput input.Input[string], enabledInput, startedInput input.Input[bool], user bool) *reconcile.Node[bool] {
+	nodeName := "systemd.satisfied:" + nameInput.Name()
+	if user {
+		nodeName = "systemd.user-satisfied:" + nameInput.Name()
+	}
+
+	return reconcile.Data(nodeName, func(ctx context.Context) (bool, error) {
 		name, err := nameInput.Value(ctx)
 		if err != nil {
 			return false, err
@@ -91,7 +130,7 @@ func SatisfiedData(nameInput input.Input[string], enabledInput, startedInput inp
 			return false, fmt.Errorf("systemd: service %s: started requires enabled", name)
 		}
 
-		actualEnabled, err := EnabledData(input.Static(name)).Value(ctx)
+		actualEnabled, err := enabledData(input.Static(name), user).Value(ctx)
 		if err != nil {
 			return false, err
 		}
@@ -100,7 +139,7 @@ func SatisfiedData(nameInput input.Input[string], enabledInput, startedInput inp
 		}
 
 		if enabled && started {
-			actualActive, err := ActiveData(input.Static(name)).Value(ctx)
+			actualActive, err := activeData(input.Static(name), user).Value(ctx)
 			if err != nil {
 				return false, err
 			}
@@ -110,7 +149,7 @@ func SatisfiedData(nameInput input.Input[string], enabledInput, startedInput inp
 		}
 
 		if !enabled {
-			actualActive, err := ActiveData(input.Static(name)).Value(ctx)
+			actualActive, err := activeData(input.Static(name), user).Value(ctx)
 			if err != nil {
 				return false, err
 			}
@@ -123,15 +162,23 @@ func SatisfiedData(nameInput input.Input[string], enabledInput, startedInput inp
 	}).Node()
 }
 
-func enable(ctx context.Context, name string, enabled, started bool) error {
+func enable(ctx context.Context, name string, enabled, started, user bool) error {
 	ops := gabric.TargetOps(ctx)
 
 	switch {
 	case !enabled:
-		return ops.Exec("systemctl", "disable", "--now", name).RunErr()
+		return ops.Exec(systemctlArgs(user, "disable", "--now", name)...).RunErr()
 	case started:
-		return ops.Exec("systemctl", "enable", "--now", name).RunErr()
+		return ops.Exec(systemctlArgs(user, "enable", "--now", name)...).RunErr()
 	default:
-		return ops.Exec("systemctl", "enable", name).RunErr()
+		return ops.Exec(systemctlArgs(user, "enable", name)...).RunErr()
 	}
+}
+
+func systemctlArgs(user bool, args ...string) []string {
+	if user {
+		return append([]string{"systemctl", "--user"}, args...)
+	}
+
+	return append([]string{"systemctl"}, args...)
 }

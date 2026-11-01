@@ -7,7 +7,11 @@ RUN apt-get update \
     ca-certificates \
     cron \
     curl \
+    dbus \
+    libpam-systemd \
+    passwd \
     procps \
+    sudo \
     systemd \
     ufw \
   && rm -rf /var/lib/apt/lists/*

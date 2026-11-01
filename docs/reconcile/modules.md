@@ -73,7 +73,10 @@ Modules are assembled from small read-only nodes. Each is created with
   `linux.UserSatisfiedData`, `linux.SSHAuthorizedKeysContentData`,
   `linux.SSHAuthorizedKeysDirPathData`, `linux.SSHAuthorizedKeysFilePathData`.
 - **OS facts:** `linux.OSReleaseData`.
-- **Units:** `systemd.EnabledData`, `systemd.ActiveData`.
+- **Units:** `systemd.EnabledData`, `systemd.ActiveData`,
+  `systemd.SatisfiedData`, `systemd.UserEnabledData`, `systemd.UserActiveData`,
+  `systemd.UserSatisfiedData`, `systemd.LingerData`,
+  `systemd.UserRuntimeDir`.
 - **Git:** `git.RemoteRevisionData`, `git.LocalRevisionData`,
   `git.TrackingRevisionData`.
 - **UFW / Docker:** `ufw.StatusData`, `ufw.ShowAddedData`,
@@ -413,6 +416,28 @@ two reads as data nodes; both return `""` when the value or file is unreadable.
 `linux.SysctlSatisfiedData(keyInput, valueInput)` is the derived bool node the
 resource checks.
 
+### systemd.Service
+
+```go
+systemd.Service(S("docker")).Started().Build()               // system manager
+systemd.Service(S("app.service")).User().Started().Build()    // user manager
+```
+
+Options: `.Enabled(...input.Input[bool])`, `.Started(...input.Input[bool])`,
+`.User(...input.Input[bool])`.
+`Build() *reconcile.ResourceBuilder[bool]`.
+A service is enabled by default and not started by default.
+`.Enabled(input.False)` with `.Started()` is an evaluation error.
+The probe is `systemctl is-enabled` (and `is-active` when `.Started()`).
+`Apply` runs `enable`, `enable --now`, or `disable --now`.
+The node is `systemd.service:<name>`.
+
+`.User()` takes zero or one bool input. No argument means true.
+When the input resolves true, the probe and apply run with `systemctl --user`.
+It manages the systemd user manager of the current target user.
+The target and the node or effect middleware select the user.
+The module leaves `XDG_RUNTIME_DIR`, sudo, and lingering to the caller.
+
 ### service.Service
 
 ```go
@@ -426,9 +451,8 @@ implementation. The cover selects `systemd.Service` with `reconcile.DynamicResou
 it reports as `service.service:<name>`. Options: `.Enabled(...input.Input[bool])`
 and `.Started(...input.Input[bool])`. A service is enabled by default and not
 started by default. `.Enabled(input.False)` with `.Started()` is an evaluation
-error. `Build() *reconcile.ResourceBuilder[bool]`. The probe is `systemctl
-is-enabled` (and `is-active` when `.Started()`); `Apply` runs `enable` /
-`enable --now` / `disable --now`.
+error. `Build() *reconcile.ResourceBuilder[bool]`. The cover manages the system
+manager. For a user unit, call `systemd.Service(...).User()` directly.
 
 ### `systemd.EnabledData` / `systemd.ActiveData`
 
@@ -441,6 +465,90 @@ Read-only data nodes (memoized once per run). `systemd.EnabledData` reads
 `systemctl is-enabled`; `systemd.ActiveData` reads `systemctl is-active`. A disabled
 or inactive unit is `false`, not an error. Nodes `systemd.enabled:<name>` /
 `systemd.active:<name>`.
+
+`systemd.UserEnabledData` and `systemd.UserActiveData` read
+`systemctl --user is-enabled` and `systemctl --user is-active`. Nodes
+`systemd.user-enabled:<name>` / `systemd.user-active:<name>`.
+
+`systemd.SatisfiedData(nameInput, enabledInput, startedInput)` and
+`systemd.UserSatisfiedData(nameInput, enabledInput, startedInput)` are the
+derived bool nodes the service resources check.
+
+### `systemd.Linger`
+
+```go
+systemd.Linger(S("app")).Build()                       // enable
+systemd.Linger(S("app")).Enabled(input.False).Build()  // disable
+```
+
+Options: `.Enabled(...input.Input[bool])`.
+`Build() *reconcile.ResourceBuilder[bool]`.
+Lingering is enabled by default.
+The probe reads `loginctl show-user <user> -p Linger`.
+`Apply` runs `loginctl enable-linger <user>` or `loginctl disable-linger <user>`.
+The node is `systemd.linger:<user>`.
+A user with no session and no lingering reports `false`.
+Enabling lingering for another user requires root or a polkit rule.
+Wrap the node with sudo middleware when the target does not run as root.
+
+### `systemd.LingerData`
+
+```go
+systemd.LingerData(S("app")) // *reconcile.Node[bool]
+```
+
+Read-only data node (memoized once per run).
+It reads `loginctl show-user <user> -p Linger`.
+A user with no session and no lingering is `false`.
+The node is `systemd.linger-data:<user>`.
+
+### `systemd.UserRuntimeDir`
+
+```go
+systemd.UserRuntimeDir(S("app")) // *reconcile.Node[string]
+```
+
+Read-only data node (memoized once per run).
+It reads `loginctl show-user <user> -p RuntimePath` and yields the path.
+The node is `systemd.user-runtime-dir:<user>`.
+`loginctl` reports an error when the user has no session and no lingering.
+
+### `systemd.WithUserRuntimeDir`
+
+```go
+systemd.WithUserRuntimeDir(S("app")) // middleware.Middleware
+```
+
+Returns middleware that sets `XDG_RUNTIME_DIR` to the path from
+`systemd.UserRuntimeDir`. The middleware reads the path before it calls next.
+Apply linger before this middleware, because
+`loginctl show-user <user> -p RuntimePath` fails when the user has no session
+and no lingering. An earlier sibling in the same group is enough.
+Place it before a sudo middleware:
+
+```go
+var appUnit = systemd.Service(S("app.service")).
+	User().
+	Started().
+	Build().
+	Node().
+	With(
+		systemd.WithUserRuntimeDir(S("app")),
+		gabric.WithRemoteSudo(&gabric.Sudo{User: "app"}),
+	)
+```
+
+`WithUserRuntimeDir` sets the target ops exec environment, so it follows
+`LocalTarget`, `LocalRemoteTarget`, and `RemoteTarget`.
+Use it on effects too:
+
+```go
+var _ = systemd.UserRestartEffect(S("app.service"), appTopic).
+	With(
+		systemd.WithUserRuntimeDir(S("app")),
+		gabric.WithRemoteSudo(&gabric.Sudo{User: "app"}),
+	)
+```
 
 ### linux.User
 
@@ -845,6 +953,9 @@ modules.ExecEffect("reload:www").Topics(wwwTopic).
 
 systemd.RestartEffect(S("ssh"), sshTopic) // systemctl restart ssh
 systemd.DaemonReloadEffect(unitTopic)      // systemctl daemon-reload
+
+systemd.UserRestartEffect(S("app.service"), appTopic) // systemctl --user restart app.service
+systemd.UserDaemonReloadEffect(unitTopic)             // systemctl --user daemon-reload
 ```
 
 `ExecEffect(name).Topics(…).Exec(cmdInput).Effect()` runs `cmdInput` over SSH
@@ -854,3 +965,10 @@ is sugar for
 `stop`), with `systemd.RestartEffect`/`systemd.ReloadEffect`/`systemd.TryRestartEffect`/
 `systemd.StartEffect`/`systemd.StopEffect` shorthands plus `systemd.DaemonReloadEffect`. `Effect()`
 panics if no topics or no command were set.
+
+`systemd.UserEffect(nameInput, verb, topics…)` is the user-scoped form and runs
+`systemctl --user <verb> <name>`. The effect is named `user-<verb>:<name>`.
+`systemd.UserRestartEffect`/`systemd.UserReloadEffect`/
+`systemd.UserTryRestartEffect`/`systemd.UserStartEffect`/
+`systemd.UserStopEffect` are shorthands. `systemd.UserDaemonReloadEffect` runs
+`systemctl --user daemon-reload` and is named `user-daemon-reload`.

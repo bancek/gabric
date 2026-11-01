@@ -247,6 +247,47 @@ var _ = modules.ExecEffect("reload-www").Topics(wwwTopic).
 Effects are for reactions that run _once per change at flush_. When a node should
 not run unless something changed, use `Filter`/`IfChanged` (see the next recipe).
 
+## A systemd user service
+
+User units live in the systemd user manager of the target user. Add `.User()`:
+
+```go
+var appUnit = systemd.Service(S("app.service")).
+	User().
+	Started().
+	Build().
+	Node()
+```
+
+`systemd.Linger` keeps the user manager available without a login session.
+Enabling lingering for another user needs root or a Polkit rule.
+`systemd.WithUserRuntimeDir` sets `XDG_RUNTIME_DIR` when sudo switches to the
+user. Put the linger node first in the service group:
+
+```go
+var appLinger = systemd.Linger(S("app")).Build().Node().
+	With(gabric.WithRemoteSudo(&gabric.Sudo{}))
+
+var appUnit = systemd.Service(S("app.service")).
+	User().
+	Started().
+	Build().
+	Node().
+	With(
+		systemd.WithUserRuntimeDir(S("app")),
+		gabric.WithRemoteSudo(&gabric.Sudo{User: "app"}),
+	)
+
+var appNode = reconcile.Group("app").
+	Contains(appLinger, appUnit).
+	Node()
+```
+
+Place `WithUserRuntimeDir` before `WithRemoteSudo`. The runtime path lookup runs
+with the task's current privileges, usually root, before sudo switches to the
+service user. The `systemctl --user` commands run as the service user.
+The module leaves `XDG_RUNTIME_DIR`, sudo, and lingering to the caller.
+
 ## Only when it changed (`Filter` / `IfChanged`)
 
 A node can be evaluated only when a condition holds. `Filter` takes a function
